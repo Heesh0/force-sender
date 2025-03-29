@@ -1,50 +1,76 @@
 const { DataTypes } = require('sequelize');
-const { createModel, createUniqueConstraint, createForeignKey } = require('../utils/dbUtils');
+const sequelize = require('../config/database');
+const { logInfo } = require('../utils/logger');
 const Domain = require('./Domain');
+const { createModel, createUniqueConstraint, createForeignKey } = require('../utils/dbUtils');
 
-const Campaign = createModel('Campaign', {
+const Campaign = sequelize.define('Campaign', {
     id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
         autoIncrement: true
     },
-    name: {
-        type: DataTypes.STRING(100),
-        allowNull: false
-    },
-    domainId: {
+    userId: {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: Domain,
+            model: 'Users',
             key: 'id'
         }
     },
+    senderId: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        references: {
+            model: 'Senders',
+            key: 'id'
+        }
+    },
+    name: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
     subject: {
-        type: DataTypes.STRING(255),
+        type: DataTypes.STRING,
         allowNull: false
     },
-    previewTitle: {
-        type: DataTypes.STRING(255),
+    content: {
+        type: DataTypes.TEXT,
         allowNull: false
     },
-    templateId: {
-        type: DataTypes.STRING(255),
-        allowNull: false
+    status: {
+        type: DataTypes.ENUM('draft', 'scheduled', 'running', 'completed', 'failed', 'cancelled'),
+        defaultValue: 'draft'
     },
-    templateParams: {
+    schedule: {
         type: DataTypes.JSON,
-        defaultValue: {}
+        allowNull: true
     },
-    totalEmails: {
+    startDate: {
+        type: DataTypes.DATE,
+        allowNull: true
+    },
+    endDate: {
+        type: DataTypes.DATE,
+        allowNull: true
+    },
+    totalRecipients: {
         type: DataTypes.INTEGER,
         defaultValue: 0
     },
-    sentEmails: {
+    sentCount: {
         type: DataTypes.INTEGER,
         defaultValue: 0
     },
-    failedEmails: {
+    failedCount: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0
+    },
+    bounceCount: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0
+    },
+    unsubscribeCount: {
         type: DataTypes.INTEGER,
         defaultValue: 0
     },
@@ -56,56 +82,32 @@ const Campaign = createModel('Campaign', {
         type: DataTypes.FLOAT,
         defaultValue: 0
     },
-    status: {
-        type: DataTypes.ENUM('draft', 'scheduled', 'running', 'paused', 'completed', 'failed'),
-        defaultValue: 'draft'
+    spamScore: {
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
-    startDate: {
-        type: DataTypes.DATE,
-        allowNull: false
-    },
-    endDate: {
-        type: DataTypes.DATE,
-        allowNull: false
-    },
-    isTest: {
-        type: DataTypes.BOOLEAN,
-        defaultValue: false
-    },
-    testEmail: {
-        type: DataTypes.STRING(255),
-        validate: {
-            isEmail: true
-        }
-    },
-    schedule: {
+    metadata: {
         type: DataTypes.JSON,
-        defaultValue: null
-    },
-    createdAt: {
-        type: DataTypes.DATE,
-        allowNull: false
-    },
-    updatedAt: {
-        type: DataTypes.DATE,
-        allowNull: false
+        defaultValue: {}
     }
 }, {
-    tableName: 'campaigns',
-    indexes: [
-        {
-            fields: ['domainId']
+    hooks: {
+        beforeCreate: async (campaign) => {
+            logInfo('Создание новой кампании:', {
+                name: campaign.name,
+                userId: campaign.userId
+            });
         },
-        {
-            fields: ['status']
-        },
-        {
-            fields: ['startDate']
-        },
-        {
-            fields: ['endDate']
+        beforeUpdate: async (campaign) => {
+            if (campaign.changed('status')) {
+                logInfo('Изменение статуса кампании:', {
+                    id: campaign.id,
+                    oldStatus: campaign.previous('status'),
+                    newStatus: campaign.status
+                });
+            }
         }
-    ]
+    }
 });
 
 // Создаем внешний ключ для связи с доменом
@@ -113,5 +115,48 @@ createForeignKey(Campaign, 'domainId', Domain);
 
 // Создаем уникальное ограничение для имени кампании в рамках домена
 createUniqueConstraint(Campaign, ['name', 'domainId']);
+
+// Методы экземпляра
+Campaign.prototype.updateStats = async function(stats) {
+    Object.assign(this, stats);
+    await this.save();
+    logInfo('Обновление статистики кампании:', {
+        id: this.id,
+        stats
+    });
+};
+
+Campaign.prototype.cancel = async function() {
+    this.status = 'cancelled';
+    await this.save();
+    logInfo('Отмена кампании:', {
+        id: this.id
+    });
+};
+
+// Методы класса
+Campaign.findByUserId = async function(userId) {
+    const campaigns = await this.findAll({ where: { userId } });
+    logInfo('Поиск кампаний по userId:', {
+        userId,
+        count: campaigns.length
+    });
+    return campaigns;
+};
+
+Campaign.findActive = async function() {
+    const campaigns = await this.findAll({
+        where: {
+            status: ['scheduled', 'running'],
+            startDate: {
+                [sequelize.Op.lte]: new Date()
+            }
+        }
+    });
+    logInfo('Поиск активных кампаний:', {
+        count: campaigns.length
+    });
+    return campaigns;
+};
 
 module.exports = Campaign; 

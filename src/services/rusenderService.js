@@ -1,53 +1,105 @@
 const axios = require('axios');
-const logger = require('../utils/logger');
+const { logger } = require('../utils/logger');
 
-class RusenderService {
+class RuSenderService {
     constructor() {
-        this.baseURL = process.env.RUSENDER_API_URL;
+        this.baseURL = 'https://api.beta.rusender.ru/api/v1';
     }
 
-    async sendEmail(domain, email, templateId, subject, previewTitle, templateParams = {}) {
+    async sendEmail(domain, recipient, campaign) {
         try {
             const response = await axios.post(
                 `${this.baseURL}/external-mails/send-by-template`,
                 {
                     mail: {
                         to: {
-                            email: email,
-                            name: ''
+                            email: recipient.email,
+                            name: recipient.name || recipient.email.split('@')[0]
                         },
                         from: {
                             email: domain.senderEmail,
-                            name: domain.mailFrom
+                            name: campaign.senderName || domain.senderEmail.split('@')[0]
                         },
-                        subject: subject,
-                        previewTitle: previewTitle,
-                        idTemplateMailUser: parseInt(templateId),
-                        params: templateParams
+                        subject: campaign.subject,
+                        previewTitle: campaign.previewTitle,
+                        idTemplateMailUser: campaign.templateId,
+                        params: campaign.templateParams
                     }
                 },
                 {
                     headers: {
-                        'Content-Type': 'application/json',
+                        'X-Api-Key': domain.apiKey,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            logger.info(`Email sent successfully to ${recipient.email}`);
+            return response.data;
+        } catch (error) {
+            logger.error(`Failed to send email to ${recipient.email}: ${error.message}`);
+            throw error;
+        }
+    }
+
+    async verifyDomain(domain) {
+        try {
+            const response = await axios.post(
+                `${this.baseURL}/domains/verify`,
+                {
+                    domain: domain.name
+                },
+                {
+                    headers: {
+                        'X-Api-Key': domain.apiKey,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            logger.info(`Domain ${domain.name} verified successfully`);
+            return response.data;
+        } catch (error) {
+            logger.error(`Failed to verify domain ${domain.name}: ${error.message}`);
+            throw error;
+        }
+    }
+
+    async getTemplates(domain) {
+        try {
+            const response = await axios.get(
+                `${this.baseURL}/templates`,
+                {
+                    headers: {
                         'X-Api-Key': domain.apiKey
                     }
                 }
             );
 
-            logger.info(`Email sent successfully to ${email}`);
-            return { success: true, data: response.data };
+            return response.data;
         } catch (error) {
-            logger.error(`Failed to send email to ${email}:`, error.response?.data || error.message);
-            return {
-                success: false,
-                error: error.response?.data?.message || error.message
-            };
+            logger.error(`Failed to get templates for domain ${domain.name}: ${error.message}`);
+            throw error;
         }
     }
 
-    async sendTestEmail(domain, email, templateId, subject, previewTitle, templateParams = {}) {
-        return this.sendEmail(domain, email, templateId, subject, previewTitle, templateParams);
+    async getTemplateDetails(domain, templateId) {
+        try {
+            const response = await axios.get(
+                `${this.baseURL}/templates/${templateId}`,
+                {
+                    headers: {
+                        'X-Api-Key': domain.apiKey
+                    }
+                }
+            );
+
+            return response.data;
+        } catch (error) {
+            logger.error(`Failed to get template details for template ${templateId}: ${error.message}`);
+            throw error;
+        }
     }
 }
 
-module.exports = new RusenderService(); 
+module.exports = new RuSenderService(); 

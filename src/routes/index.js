@@ -73,4 +73,28 @@ router.get('/', (req, res) => {
     res.render('pages/index');
 });
 
+// Auth routes
+const authRoutes = require('./auth');
+router.use('/auth', authRoutes);
+
+// User routes
+const userRoutes = require('./user');
+router.use('/users', userRoutes);
+
+// Sender routes
+const senderRoutes = require('./sender');
+router.use('/senders', senderRoutes);
+
+// Campaign routes
+const campaignRoutes = require('./campaign');
+router.use('/campaigns', campaignRoutes);
+
+// Recipient routes
+const recipientRoutes = require('./recipient');
+router.use('/recipients', recipientRoutes);
+
+// Stats routes
+const statsRoutes = require('./stats');
+router.use('/stats', statsRoutes);
+
 module.exports = router; 

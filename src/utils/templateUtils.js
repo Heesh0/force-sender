@@ -1,150 +1,206 @@
 const handlebars = require('handlebars');
 const fs = require('fs').promises;
 const path = require('path');
-const logger = require('./logger');
+const { logInfo, logError } = require('./logger');
+const config = require('../config/app');
 
-const loadTemplate = async (templateName) => {
-    try {
-        const templatePath = path.join(__dirname, '../../templates', `${templateName}.hbs`);
-        const templateContent = await fs.readFile(templatePath, 'utf-8');
-        return handlebars.compile(templateContent);
-    } catch (error) {
-        logger.error(`Ошибка при загрузке шаблона ${templateName}:`, error);
-        throw new Error(`Шаблон ${templateName} не найден`);
-    }
-};
+// Регистрация вспомогательных функций для Handlebars
+handlebars.registerHelper('formatDate', function(date) {
+    return new Date(date).toLocaleDateString('ru-RU');
+});
 
-const renderTemplate = async (templateName, data) => {
+handlebars.registerHelper('formatNumber', function(number) {
+    return new Number(number).toLocaleString('ru-RU');
+});
+
+handlebars.registerHelper('ifEquals', function(arg1, arg2, options) {
+    return (arg1 === arg2) ? options.fn(this) : options.inverse(this);
+});
+
+// Загрузка шаблона из файла
+const loadTemplate = async (templatePath) => {
     try {
-        const template = await loadTemplate(templateName);
-        return template(data);
+        const content = await fs.readFile(templatePath, 'utf-8');
+        logInfo('Загружен шаблон:', { path: templatePath });
+        return content;
     } catch (error) {
-        logger.error(`Ошибка при рендеринге шаблона ${templateName}:`, error);
+        logError('Ошибка загрузки шаблона:', { path: templatePath, error });
         throw error;
     }
 };
 
-const registerPartial = async (partialName) => {
+// Компиляция шаблона
+const compileTemplate = async (template, data) => {
     try {
-        const partialPath = path.join(__dirname, '../../templates/partials', `${partialName}.hbs`);
-        const partialContent = await fs.readFile(partialPath, 'utf-8');
-        handlebars.registerPartial(partialName, partialContent);
+        const compiledTemplate = handlebars.compile(template);
+        const result = compiledTemplate(data);
+        logInfo('Шаблон скомпилирован:', { data });
+        return result;
     } catch (error) {
-        logger.error(`Ошибка при регистрации частичного шаблона ${partialName}:`, error);
-        throw new Error(`Частичный шаблон ${partialName} не найден`);
-    }
-};
-
-const registerHelpers = () => {
-    handlebars.registerHelper('formatDate', (date) => {
-        return new Date(date).toLocaleDateString('ru-RU');
-    });
-
-    handlebars.registerHelper('ifEquals', (arg1, arg2, options) => {
-        return (arg1 === arg2) ? options.fn(this) : options.inverse(this);
-    });
-
-    handlebars.registerHelper('concat', (...args) => {
-        args.pop();
-        return args.join('');
-    });
-
-    handlebars.registerHelper('uppercase', (str) => {
-        return str.toUpperCase();
-    });
-
-    handlebars.registerHelper('lowercase', (str) => {
-        return str.toLowerCase();
-    });
-
-    handlebars.registerHelper('capitalize', (str) => {
-        return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
-    });
-
-    handlebars.registerHelper('truncate', (str, len) => {
-        if (str.length > len) {
-            return str.substring(0, len) + '...';
-        }
-        return str;
-    });
-
-    handlebars.registerHelper('repeat', (str, times) => {
-        return str.repeat(times);
-    });
-
-    handlebars.registerHelper('replace', (str, search, replace) => {
-        return str.replace(new RegExp(search, 'g'), replace);
-    });
-
-    handlebars.registerHelper('math', (lvalue, operator, rvalue) => {
-        lvalue = parseFloat(lvalue);
-        rvalue = parseFloat(rvalue);
-        return {
-            '+': lvalue + rvalue,
-            '-': lvalue - rvalue,
-            '*': lvalue * rvalue,
-            '/': lvalue / rvalue,
-            '%': lvalue % rvalue
-        }[operator];
-    });
-};
-
-const createTemplate = async (templateName, content) => {
-    try {
-        const templatePath = path.join(__dirname, '../../templates', `${templateName}.hbs`);
-        await fs.writeFile(templatePath, content, 'utf-8');
-        logger.info(`Создан шаблон: ${templateName}`);
-        return true;
-    } catch (error) {
-        logger.error(`Ошибка при создании шаблона ${templateName}:`, error);
+        logError('Ошибка компиляции шаблона:', { data, error });
         throw error;
     }
 };
 
-const updateTemplate = async (templateName, content) => {
+// Создание нового шаблона
+const createTemplate = async (name, content) => {
     try {
-        const templatePath = path.join(__dirname, '../../templates', `${templateName}.hbs`);
-        await fs.writeFile(templatePath, content, 'utf-8');
-        logger.info(`Обновлен шаблон: ${templateName}`);
-        return true;
+        const templatePath = path.join(config.app.templatesDir, `${name}.hbs`);
+        await fs.writeFile(templatePath, content);
+        logInfo('Создан новый шаблон:', { name });
+        return templatePath;
     } catch (error) {
-        logger.error(`Ошибка при обновлении шаблона ${templateName}:`, error);
+        logError('Ошибка создания шаблона:', { name, error });
         throw error;
     }
 };
 
-const deleteTemplate = async (templateName) => {
+// Обновление существующего шаблона
+const updateTemplate = async (name, content) => {
     try {
-        const templatePath = path.join(__dirname, '../../templates', `${templateName}.hbs`);
+        const templatePath = path.join(config.app.templatesDir, `${name}.hbs`);
+        await fs.writeFile(templatePath, content);
+        logInfo('Обновлен шаблон:', { name });
+        return templatePath;
+    } catch (error) {
+        logError('Ошибка обновления шаблона:', { name, error });
+        throw error;
+    }
+};
+
+// Удаление шаблона
+const deleteTemplate = async (name) => {
+    try {
+        const templatePath = path.join(config.app.templatesDir, `${name}.hbs`);
         await fs.unlink(templatePath);
-        logger.info(`Удален шаблон: ${templateName}`);
+        logInfo('Удален шаблон:', { name });
         return true;
     } catch (error) {
-        logger.error(`Ошибка при удалении шаблона ${templateName}:`, error);
+        logError('Ошибка удаления шаблона:', { name, error });
         throw error;
     }
 };
 
+// Получение списка всех шаблонов
 const listTemplates = async () => {
     try {
-        const templatesDir = path.join(__dirname, '../../templates');
-        const files = await fs.readdir(templatesDir);
-        return files
+        const files = await fs.readdir(config.app.templatesDir);
+        const templates = files
             .filter(file => file.endsWith('.hbs'))
-            .map(file => file.replace('.hbs', ''));
+            .map(file => ({
+                name: path.basename(file, '.hbs'),
+                path: path.join(config.app.templatesDir, file)
+            }));
+
+        logInfo('Получен список шаблонов:', { count: templates.length });
+        return templates;
     } catch (error) {
-        logger.error('Ошибка при получении списка шаблонов:', error);
+        logError('Ошибка получения списка шаблонов:', error);
+        throw error;
+    }
+};
+
+// Получение информации о шаблоне
+const getTemplateInfo = async (name) => {
+    try {
+        const templatePath = path.join(config.app.templatesDir, `${name}.hbs`);
+        const stats = await fs.stat(templatePath);
+        const content = await fs.readFile(templatePath, 'utf-8');
+
+        const info = {
+            name,
+            path: templatePath,
+            size: stats.size,
+            createdAt: stats.birthtime,
+            modifiedAt: stats.mtime,
+            content
+        };
+
+        logInfo('Получена информация о шаблоне:', { name });
+        return info;
+    } catch (error) {
+        logError('Ошибка получения информации о шаблоне:', { name, error });
+        throw error;
+    }
+};
+
+// Валидация шаблона
+const validateTemplate = async (content) => {
+    try {
+        handlebars.compile(content);
+        logInfo('Шаблон валиден');
+        return true;
+    } catch (error) {
+        logError('Ошибка валидации шаблона:', error);
+        return false;
+    }
+};
+
+// Получение переменных шаблона
+const getTemplateVariables = async (content) => {
+    try {
+        const ast = handlebars.parse(content);
+        const variables = new Set();
+
+        const traverse = (node) => {
+            if (node.type === 'MustacheStatement') {
+                variables.add(node.path.original);
+            }
+            if (node.program) {
+                traverse(node.program);
+            }
+            if (node.inverse) {
+                traverse(node.inverse);
+            }
+        };
+
+        traverse(ast);
+        logInfo('Получены переменные шаблона:', { variables: Array.from(variables) });
+        return Array.from(variables);
+    } catch (error) {
+        logError('Ошибка получения переменных шаблона:', error);
+        throw error;
+    }
+};
+
+// Предварительный просмотр шаблона
+const previewTemplate = async (name, data) => {
+    try {
+        const template = await loadTemplate(path.join(config.app.templatesDir, `${name}.hbs`));
+        const result = await compileTemplate(template, data);
+        logInfo('Создан предварительный просмотр шаблона:', { name });
+        return result;
+    } catch (error) {
+        logError('Ошибка создания предварительного просмотра шаблона:', { name, error });
+        throw error;
+    }
+};
+
+// Копирование шаблона
+const copyTemplate = async (sourceName, targetName) => {
+    try {
+        const sourcePath = path.join(config.app.templatesDir, `${sourceName}.hbs`);
+        const targetPath = path.join(config.app.templatesDir, `${targetName}.hbs`);
+        
+        await fs.copyFile(sourcePath, targetPath);
+        logInfo('Шаблон скопирован:', { source: sourceName, target: targetName });
+        return targetPath;
+    } catch (error) {
+        logError('Ошибка копирования шаблона:', { source: sourceName, target: targetName, error });
         throw error;
     }
 };
 
 module.exports = {
     loadTemplate,
-    renderTemplate,
-    registerPartial,
-    registerHelpers,
+    compileTemplate,
     createTemplate,
     updateTemplate,
     deleteTemplate,
-    listTemplates
+    listTemplates,
+    getTemplateInfo,
+    validateTemplate,
+    getTemplateVariables,
+    previewTemplate,
+    copyTemplate
 }; 

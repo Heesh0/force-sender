@@ -1,49 +1,54 @@
-const { getConfig } = require('../utils/configUtils');
+const { Sequelize } = require('sequelize');
+const { logInfo, logError } = require('../utils/logger');
 
-module.exports = {
-    development: {
-        username: getConfig('db.user'),
-        password: getConfig('db.password'),
-        database: getConfig('db.name'),
-        host: getConfig('db.host'),
-        port: getConfig('db.port'),
-        dialect: getConfig('db.dialect'),
-        logging: (msg) => console.log(msg),
+const sequelize = new Sequelize(
+    process.env.DB_NAME,
+    process.env.DB_USER,
+    process.env.DB_PASSWORD,
+    {
+        host: process.env.DB_HOST,
+        port: process.env.DB_PORT,
+        dialect: 'postgres',
+        logging: (msg) => logInfo('SQL Query:', { query: msg }),
         pool: {
-            max: getConfig('db.pool.max'),
-            min: getConfig('db.pool.min'),
-            acquire: getConfig('db.pool.acquire'),
-            idle: getConfig('db.pool.idle')
-        }
-    },
-    test: {
-        username: getConfig('db.user'),
-        password: getConfig('db.password'),
-        database: getConfig('db.name') + '_test',
-        host: getConfig('db.host'),
-        port: getConfig('db.port'),
-        dialect: getConfig('db.dialect'),
-        logging: false,
-        pool: {
-            max: getConfig('db.pool.max'),
-            min: getConfig('db.pool.min'),
-            acquire: getConfig('db.pool.acquire'),
-            idle: getConfig('db.pool.idle')
-        }
-    },
-    production: {
-        username: getConfig('db.user'),
-        password: getConfig('db.password'),
-        database: getConfig('db.name'),
-        host: getConfig('db.host'),
-        port: getConfig('db.port'),
-        dialect: getConfig('db.dialect'),
-        logging: false,
-        pool: {
-            max: getConfig('db.pool.max'),
-            min: getConfig('db.pool.min'),
-            acquire: getConfig('db.pool.acquire'),
-            idle: getConfig('db.pool.idle')
+            max: 5,
+            min: 0,
+            acquire: 30000,
+            idle: 10000
+        },
+        dialectOptions: {
+            ssl: process.env.DB_SSL === 'true' ? {
+                require: true,
+                rejectUnauthorized: false
+            } : false
         }
     }
+);
+
+// Проверка подключения к базе данных
+const testConnection = async () => {
+    try {
+        await sequelize.authenticate();
+        logInfo('Подключение к базе данных успешно установлено');
+    } catch (error) {
+        logError('Ошибка подключения к базе данных:', error);
+        throw error;
+    }
+};
+
+// Синхронизация моделей с базой данных
+const syncDatabase = async (force = false) => {
+    try {
+        await sequelize.sync({ force });
+        logInfo('База данных синхронизирована', { force });
+    } catch (error) {
+        logError('Ошибка синхронизации базы данных:', error);
+        throw error;
+    }
+};
+
+module.exports = {
+    sequelize,
+    testConnection,
+    syncDatabase
 }; 

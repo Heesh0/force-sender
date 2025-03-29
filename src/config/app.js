@@ -1,85 +1,51 @@
-const { getConfig } = require('../utils/configUtils');
+require('dotenv').config();
 
 module.exports = {
-    app: {
-        name: 'ForceSender',
-        version: '1.0.0',
-        port: getConfig('app.port') || 3000,
-        host: getConfig('app.host') || 'localhost',
-        env: getConfig('app.env') || 'development',
-        timezone: getConfig('app.timezone') || 'UTC',
-        secret: getConfig('app.secret') || 'your-secret-key',
-        session: {
-            secret: getConfig('app.session.secret') || 'session-secret-key',
-            resave: getConfig('app.session.resave') || false,
-            saveUninitialized: getConfig('app.session.saveUninitialized') || false,
-            cookie: {
-                secure: getConfig('app.session.cookie.secure') || false,
-                maxAge: getConfig('app.session.cookie.maxAge') || 24 * 60 * 60 * 1000 // 24 hours
-            }
-        }
+    // Основные настройки
+    port: process.env.PORT || 3000,
+    nodeEnv: process.env.NODE_ENV || 'development',
+    
+    // Настройки безопасности
+    jwtSecret: process.env.JWT_SECRET,
+    jwtExpiresIn: process.env.JWT_EXPIRES_IN || '24h',
+    
+    // Настройки базы данных
+    database: {
+        host: process.env.DB_HOST,
+        port: process.env.DB_PORT,
+        name: process.env.DB_NAME,
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        dialect: 'postgres',
+        logging: process.env.NODE_ENV === 'development' ? console.log : false
     },
-    cors: {
-        enabled: getConfig('cors.enabled') || true,
-        origin: getConfig('cors.origin') || '*',
-        methods: getConfig('cors.methods') || ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-        allowedHeaders: getConfig('cors.allowedHeaders') || ['Content-Type', 'Authorization'],
-        exposedHeaders: getConfig('cors.exposedHeaders') || [],
-        credentials: getConfig('cors.credentials') || true,
-        maxAge: getConfig('cors.maxAge') || 86400 // 24 hours
-    },
-    upload: {
-        maxSize: getConfig('upload.maxSize') || 10, // MB
-        allowedTypes: getConfig('upload.allowedTypes') || [
-            'text/csv',
-            'application/vnd.ms-excel',
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        ],
-        tempDir: getConfig('upload.tempDir') || 'uploads/temp',
-        finalDir: getConfig('upload.finalDir') || 'uploads/final'
-    },
+    
+    // Настройки Redis
     redis: {
-        host: getConfig('redis.host') || 'localhost',
-        port: getConfig('redis.port') || 6379,
-        password: getConfig('redis.password') || '',
-        db: getConfig('redis.db') || 0,
-        keyPrefix: getConfig('redis.keyPrefix') || 'forcesender:'
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT) || 6379,
+        password: process.env.REDIS_PASSWORD,
+        db: parseInt(process.env.REDIS_DB) || 0
     },
+    
+    // Настройки загрузки файлов
+    upload: {
+        maxFileSize: 5 * 1024 * 1024, // 5MB
+        allowedTypes: ['text/csv'],
+        tempDir: 'uploads/temp'
+    },
+    
+    // Настройки RuSender API
+    rusender: {
+        apiKey: process.env.RUSENDER_API_KEY,
+        baseUrl: process.env.RUSENDER_API_URL || 'https://api.rusender.com/v1',
+        timeout: 30000 // 30 секунд
+    },
+    
+    // Настройки логирования
     logging: {
-        level: getConfig('logging.level') || 'info',
-        format: getConfig('logging.format') || 'combined',
-        transports: getConfig('logging.transports') || ['console', 'file'],
-        filename: getConfig('logging.filename') || 'logs/app.log',
-        maxSize: getConfig('logging.maxSize') || 10485760, // 10MB
-        maxFiles: getConfig('logging.maxFiles') || 5
-    },
-    email: {
-        from: getConfig('email.from') || 'noreply@forcesender.com',
-        replyTo: getConfig('email.replyTo') || 'support@forcesender.com',
-        templates: {
-            welcome: getConfig('email.templates.welcome') || 'welcome',
-            resetPassword: getConfig('email.templates.resetPassword') || 'reset-password',
-            notification: getConfig('email.templates.notification') || 'notification'
-        }
-    },
-    security: {
-        bcryptRounds: getConfig('security.bcryptRounds') || 10,
-        jwtSecret: getConfig('security.jwtSecret') || 'jwt-secret-key',
-        jwtExpiresIn: getConfig('security.jwtExpiresIn') || '24h',
-        rateLimit: {
-            windowMs: getConfig('security.rateLimit.windowMs') || 15 * 60 * 1000, // 15 minutes
-            max: getConfig('security.rateLimit.max') || 100 // limit each IP to 100 requests per windowMs
-        }
-    },
-    monitoring: {
-        enabled: getConfig('monitoring.enabled') || true,
-        metrics: {
-            enabled: getConfig('monitoring.metrics.enabled') || true,
-            path: getConfig('monitoring.metrics.path') || '/metrics'
-        },
-        health: {
-            enabled: getConfig('monitoring.health.enabled') || true,
-            path: getConfig('monitoring.health.path') || '/health'
-        }
+        level: process.env.LOG_LEVEL || 'info',
+        format: process.env.LOG_FORMAT || 'combined',
+        dir: process.env.LOG_DIR || 'logs'
     }
 }; 

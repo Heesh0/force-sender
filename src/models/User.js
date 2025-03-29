@@ -1,23 +1,16 @@
 const { DataTypes } = require('sequelize');
-const { createModel, createUniqueConstraint } = require('../utils/dbUtils');
-const bcrypt = require('bcryptjs');
+const sequelize = require('../config/database');
+const { hashPassword, generateSalt } = require('../utils/crypto');
+const { logInfo } = require('../utils/logger');
 
-const User = createModel('User', {
+const User = sequelize.define('User', {
     id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
         autoIncrement: true
     },
-    username: {
-        type: DataTypes.STRING(50),
-        allowNull: false,
-        unique: true,
-        validate: {
-            len: [3, 50]
-        }
-    },
     email: {
-        type: DataTypes.STRING(255),
+        type: DataTypes.STRING,
         allowNull: false,
         unique: true,
         validate: {
@@ -25,8 +18,20 @@ const User = createModel('User', {
         }
     },
     password: {
-        type: DataTypes.STRING(255),
+        type: DataTypes.STRING,
         allowNull: false
+    },
+    salt: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    firstName: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    lastName: {
+        type: DataTypes.STRING,
+        allowNull: true
     },
     role: {
         type: DataTypes.ENUM('admin', 'user'),
@@ -37,84 +42,39 @@ const User = createModel('User', {
         defaultValue: true
     },
     lastLogin: {
-        type: DataTypes.DATE
-    },
-    apiKey: {
-        type: DataTypes.STRING(255),
-        unique: true
-    },
-    settings: {
-        type: DataTypes.JSON,
-        defaultValue: {}
-    },
-    createdAt: {
         type: DataTypes.DATE,
-        allowNull: false
-    },
-    updatedAt: {
-        type: DataTypes.DATE,
-        allowNull: false
+        allowNull: true
     }
 }, {
-    tableName: 'users',
-    indexes: [
-        {
-            unique: true,
-            fields: ['username']
-        },
-        {
-            unique: true,
-            fields: ['email']
-        },
-        {
-            unique: true,
-            fields: ['apiKey']
-        },
-        {
-            fields: ['role']
-        },
-        {
-            fields: ['isActive']
-        }
-    ],
     hooks: {
         beforeCreate: async (user) => {
             if (user.password) {
-                user.password = await bcrypt.hash(user.password, 10);
-            }
-            if (!user.apiKey) {
-                user.apiKey = await generateApiKey();
+                user.salt = generateSalt();
+                user.password = hashPassword(user.password, user.salt);
             }
         },
         beforeUpdate: async (user) => {
             if (user.changed('password')) {
-                user.password = await bcrypt.hash(user.password, 10);
+                user.salt = generateSalt();
+                user.password = hashPassword(user.password, user.salt);
             }
         }
     }
 });
 
-// Создаем уникальные ограничения
-createUniqueConstraint(User, ['username']);
-createUniqueConstraint(User, ['email']);
-createUniqueConstraint(User, ['apiKey']);
-
 // Методы экземпляра
-User.prototype.validatePassword = async function(password) {
-    return bcrypt.compare(password, this.password);
+User.prototype.toJSON = function() {
+    const values = { ...this.get() };
+    delete values.password;
+    delete values.salt;
+    return values;
 };
 
-User.prototype.generateApiKey = async function() {
-    const apiKey = await generateApiKey();
-    this.apiKey = apiKey;
-    await this.save();
-    return apiKey;
-};
-
-// Вспомогательные функции
-const generateApiKey = async () => {
-    const crypto = require('crypto');
-    return crypto.randomBytes(32).toString('hex');
+// Методы класса
+User.findByEmail = async function(email) {
+    const user = await this.findOne({ where: { email } });
+    logInfo('Поиск пользователя по email:', { email, found: !!user });
+    return user;
 };
 
 module.exports = User; 

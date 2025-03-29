@@ -1,42 +1,251 @@
 const Bull = require('bull');
+const { logInfo, logError } = require('./logger');
+const config = require('../config/app');
 const { getConfig } = require('./configUtils');
-const logger = require('./logger');
 const { sendEmail, getEmailStatus } = require('./rusenderUtils');
 
-const emailQueue = new Bull('email-queue', {
-    redis: {
-        host: getConfig('redis.host'),
-        port: getConfig('redis.port'),
-        password: getConfig('redis.password')
-    },
-    defaultJobOptions: {
-        attempts: 3,
-        backoff: {
-            type: 'exponential',
-            delay: 1000
-        }
-    }
-});
+// Создаем очереди
+const emailQueue = new Bull('email', config.redis);
+const campaignQueue = new Bull('campaign', config.redis);
+const analyticsQueue = new Bull('analytics', config.redis);
 
-const addEmailJob = async (data) => {
+// Получение событий очереди
+const getQueueEvents = (queueName) => {
+    const queue = getQueue(queueName);
+    if (!queue) {
+        throw new Error(`Очередь ${queueName} не найдена`);
+    }
+
+    return {
+        getActiveCount: async () => {
+            try {
+                return await queue.getActiveCount();
+            } catch (error) {
+                logError(`Ошибка получения количества активных задач в очереди ${queueName}:`, error);
+                return 0;
+            }
+        },
+        getWaitingCount: async () => {
+            try {
+                return await queue.getWaitingCount();
+            } catch (error) {
+                logError(`Ошибка получения количества ожидающих задач в очереди ${queueName}:`, error);
+                return 0;
+            }
+        },
+        getCompletedCount: async () => {
+            try {
+                return await queue.getCompletedCount();
+            } catch (error) {
+                logError(`Ошибка получения количества завершенных задач в очереди ${queueName}:`, error);
+                return 0;
+            }
+        },
+        getFailedCount: async () => {
+            try {
+                return await queue.getFailedCount();
+            } catch (error) {
+                logError(`Ошибка получения количества неудачных задач в очереди ${queueName}:`, error);
+                return 0;
+            }
+        },
+        getDelayedCount: async () => {
+            try {
+                return await queue.getDelayedCount();
+            } catch (error) {
+                logError(`Ошибка получения количества отложенных задач в очереди ${queueName}:`, error);
+                return 0;
+            }
+        },
+        getAverageProcessingTime: async () => {
+            try {
+                const jobs = await queue.getJobs(['completed'], 0, 100);
+                if (jobs.length === 0) return 0;
+
+                const totalTime = jobs.reduce((sum, job) => {
+                    return sum + (job.finishedOn - job.processedOn);
+                }, 0);
+
+                return totalTime / jobs.length;
+            } catch (error) {
+                logError(`Ошибка получения среднего времени обработки задач в очереди ${queueName}:`, error);
+                return 0;
+            }
+        },
+        getThroughput: async () => {
+            try {
+                const completedCount = await queue.getCompletedCount();
+                const failedCount = await queue.getFailedCount();
+                const timeWindow = 60 * 1000; // 1 минута
+
+                return (completedCount + failedCount) / (timeWindow / 1000);
+            } catch (error) {
+                logError(`Ошибка получения пропускной способности очереди ${queueName}:`, error);
+                return 0;
+            }
+        }
+    };
+};
+
+// Получение очереди по имени
+const getQueue = (queueName) => {
+    switch (queueName) {
+        case 'email':
+            return emailQueue;
+        case 'campaign':
+            return campaignQueue;
+        case 'analytics':
+            return analyticsQueue;
+        default:
+            return null;
+    }
+};
+
+// Добавление задачи в очередь
+const addJob = async (queueName, data, options = {}) => {
     try {
-        const job = await emailQueue.add(data);
-        logger.info(`Добавлена задача отправки письма: ${job.id}`);
+        const queue = getQueue(queueName);
+        if (!queue) {
+            throw new Error(`Очередь ${queueName} не найдена`);
+        }
+
+        const job = await queue.add(data, options);
+        logInfo(`Задача добавлена в очередь ${queueName}:`, {
+            jobId: job.id,
+            data
+        });
+
         return job;
     } catch (error) {
-        logger.error('Ошибка при добавлении задачи в очередь:', error);
+        logError(`Ошибка добавления задачи в очередь ${queueName}:`, error);
         throw error;
     }
+};
+
+// Получение задачи из очереди
+const getJob = async (queueName, jobId) => {
+    try {
+        const queue = getQueue(queueName);
+        if (!queue) {
+            throw new Error(`Очередь ${queueName} не найдена`);
+        }
+
+        const job = await queue.getJob(jobId);
+        if (!job) {
+            throw new Error(`Задача ${jobId} не найдена в очереди ${queueName}`);
+        }
+
+        return job;
+    } catch (error) {
+        logError(`Ошибка получения задачи из очереди ${queueName}:`, error);
+        throw error;
+    }
+};
+
+// Удаление задачи из очереди
+const removeJob = async (queueName, jobId) => {
+    try {
+        const queue = getQueue(queueName);
+        if (!queue) {
+            throw new Error(`Очередь ${queueName} не найдена`);
+        }
+
+        const job = await getJob(queueName, jobId);
+        await job.remove();
+
+        logInfo(`Задача удалена из очереди ${queueName}:`, {
+            jobId
+        });
+    } catch (error) {
+        logError(`Ошибка удаления задачи из очереди ${queueName}:`, error);
+        throw error;
+    }
+};
+
+// Очистка очереди
+const cleanQueue = async (queueName, grace = 1000) => {
+    try {
+        const queue = getQueue(queueName);
+        if (!queue) {
+            throw new Error(`Очередь ${queueName} не найдена`);
+        }
+
+        await queue.clean(grace, 'completed');
+        await queue.clean(grace, 'failed');
+        await queue.clean(grace, 'delayed');
+
+        logInfo(`Очередь ${queueName} очищена`);
+    } catch (error) {
+        logError(`Ошибка очистки очереди ${queueName}:`, error);
+        throw error;
+    }
+};
+
+// Получение статистики очереди
+const getQueueStats = async (queueName) => {
+    try {
+        const queue = getQueue(queueName);
+        if (!queue) {
+            throw new Error(`Очередь ${queueName} не найдена`);
+        }
+
+        const stats = {
+            active: await queue.getActiveCount(),
+            waiting: await queue.getWaitingCount(),
+            completed: await queue.getCompletedCount(),
+            failed: await queue.getFailedCount(),
+            delayed: await queue.getDelayedCount(),
+            averageProcessingTime: await getQueueEvents(queueName).getAverageProcessingTime(),
+            throughput: await getQueueEvents(queueName).getThroughput()
+        };
+
+        logInfo(`Получена статистика очереди ${queueName}:`, stats);
+        return stats;
+    } catch (error) {
+        logError(`Ошибка получения статистики очереди ${queueName}:`, error);
+        throw error;
+    }
+};
+
+// Инициализация обработчиков событий очереди
+const initializeQueueEvents = () => {
+    const queues = [emailQueue, campaignQueue, analyticsQueue];
+
+    queues.forEach(queue => {
+        queue.on('error', error => {
+            logError(`Ошибка в очереди ${queue.name}:`, error);
+        });
+
+        queue.on('waiting', jobId => {
+            logInfo(`Задача ${jobId} ожидает обработки в очереди ${queue.name}`);
+        });
+
+        queue.on('active', job => {
+            logInfo(`Задача ${job.id} начала обработку в очереди ${queue.name}`);
+        });
+
+        queue.on('completed', job => {
+            logInfo(`Задача ${job.id} успешно завершена в очереди ${queue.name}`);
+        });
+
+        queue.on('failed', (job, error) => {
+            logError(`Задача ${job.id} завершилась с ошибкой в очереди ${queue.name}:`, error);
+        });
+
+        queue.on('stalled', job => {
+            logError(`Задача ${job.id} застряла в очереди ${queue.name}`);
+        });
+    });
 };
 
 const processEmailQueue = async () => {
     emailQueue.process(async (job) => {
         try {
             const result = await sendEmail(job.data);
-            logger.info(`Письмо успешно отправлено: ${job.id}`);
+            logInfo(`Письмо успешно отправлено: ${job.id}`);
             return result;
         } catch (error) {
-            logger.error(`Ошибка при обработке задачи ${job.id}:`, error);
+            logError(`Ошибка при обработке задачи ${job.id}:`, error);
             throw error;
         }
     });
@@ -58,70 +267,28 @@ const getQueueStatus = async () => {
             failed
         };
     } catch (error) {
-        logger.error('Ошибка при получении статуса очереди:', error);
-        throw error;
-    }
-};
-
-const cleanQueue = async (completedDays = 7, failedDays = 30) => {
-    try {
-        const now = Date.now();
-        const completedBefore = now - (completedDays * 24 * 60 * 60 * 1000);
-        const failedBefore = now - (failedDays * 24 * 60 * 60 * 1000);
-
-        await Promise.all([
-            emailQueue.clean(completedDays * 24 * 60 * 60 * 1000, 'completed'),
-            emailQueue.clean(failedDays * 24 * 60 * 60 * 1000, 'failed')
-        ]);
-
-        logger.info(`Очередь очищена: удалены задачи старше ${completedDays} дней (выполненные) и ${failedDays} дней (неудачные)`);
-    } catch (error) {
-        logger.error('Ошибка при очистке очереди:', error);
-        throw error;
-    }
-};
-
-const getJob = async (jobId) => {
-    try {
-        const job = await emailQueue.getJob(jobId);
-        if (!job) {
-            throw new Error(`Задача ${jobId} не найдена`);
-        }
-        return job;
-    } catch (error) {
-        logger.error(`Ошибка при получении задачи ${jobId}:`, error);
-        throw error;
-    }
-};
-
-const removeJob = async (jobId) => {
-    try {
-        const job = await getJob(jobId);
-        await job.remove();
-        logger.info(`Задача ${jobId} удалена из очереди`);
-    } catch (error) {
-        logger.error(`Ошибка при удалении задачи ${jobId}:`, error);
+        logError('Ошибка при получении статуса очереди:', error);
         throw error;
     }
 };
 
 const retryJob = async (jobId) => {
     try {
-        const job = await getJob(jobId);
+        const job = await getJob('email', jobId);
         await job.retry();
-        logger.info(`Задача ${jobId} добавлена на повторную обработку`);
+        logInfo(`Задача ${jobId} добавлена на повторную обработку`);
     } catch (error) {
-        logger.error(`Ошибка при повторной обработке задачи ${jobId}:`, error);
+        logError(`Ошибка при повторной обработке задачи ${jobId}:`, error);
         throw error;
     }
 };
 
 const getJobLogs = async (jobId) => {
     try {
-        const job = await getJob(jobId);
+        const job = await getJob('email', jobId);
         return await job.logs();
     } catch (error) {
-        logger.error(`Ошибка при получении логов задачи ${jobId}:`, error);
+        logError(`Ошибка при получении логов задачи ${jobId}:`, error);
         throw error;
     }
 };
@@ -129,9 +296,9 @@ const getJobLogs = async (jobId) => {
 const pauseQueue = async () => {
     try {
         await emailQueue.pause();
-        logger.info('Очередь приостановлена');
+        logInfo('Очередь приостановлена');
     } catch (error) {
-        logger.error('Ошибка при приостановке очереди:', error);
+        logError('Ошибка при приостановке очереди:', error);
         throw error;
     }
 };
@@ -139,46 +306,25 @@ const pauseQueue = async () => {
 const resumeQueue = async () => {
     try {
         await emailQueue.resume();
-        logger.info('Очередь возобновлена');
+        logInfo('Очередь возобновлена');
     } catch (error) {
-        logger.error('Ошибка при возобновлении очереди:', error);
+        logError('Ошибка при возобновлении очереди:', error);
         throw error;
     }
 };
 
-const getQueueEvents = () => {
-    emailQueue.on('completed', (job) => {
-        logger.info(`Задача ${job.id} успешно выполнена`);
-    });
-
-    emailQueue.on('failed', (job, error) => {
-        logger.error(`Задача ${job.id} завершилась с ошибкой:`, error);
-    });
-
-    emailQueue.on('stalled', (job) => {
-        logger.warn(`Задача ${job.id} зависла`);
-    });
-
-    emailQueue.on('active', (job) => {
-        logger.info(`Задача ${job.id} начала обработку`);
-    });
-
-    emailQueue.on('waiting', (jobId) => {
-        logger.info(`Задача ${jobId} ожидает обработки`);
-    });
-};
-
 module.exports = {
-    emailQueue,
-    addEmailJob,
-    processEmailQueue,
-    getQueueStatus,
-    cleanQueue,
+    getQueueEvents,
+    addJob,
     getJob,
     removeJob,
+    cleanQueue,
+    getQueueStats,
+    initializeQueueEvents,
+    processEmailQueue,
+    getQueueStatus,
     retryJob,
     getJobLogs,
     pauseQueue,
-    resumeQueue,
-    getQueueEvents
+    resumeQueue
 }; 

@@ -14,7 +14,7 @@ const compression = require('compression');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const config = require('./config/app');
-const { testConnection } = require('./utils/dbUtils');
+const { testConnection, syncDatabase } = require('./config/database');
 const { getQueueEvents } = require('./utils/queueUtils');
 
 const app = express();
@@ -46,6 +46,7 @@ app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/recipients', require('./routes/recipients'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/metrics', require('./routes/metrics'));
+app.use('/api/stats', require('./routes/stats'));
 
 // Error handling
 app.use(errorHandler);
@@ -61,7 +62,7 @@ io.on('connection', (socket) => {
 
 // Health check
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok' });
+    res.status(200).json({ status: 'ok' });
 });
 
 // Metrics endpoint
@@ -84,22 +85,24 @@ const initialize = async () => {
         // Test database connection
         await testConnection();
 
-        // Sync database
-        await sequelize.sync();
+        // Sync database models
+        await syncDatabase();
 
         // Initialize queue events
         getQueueEvents();
 
         // Start server
-        app.listen(config.app.port, config.app.host, () => {
-            logger.info(`Сервер запущен на http://${config.app.host}:${config.app.port}`);
+        const port = process.env.PORT || 3000;
+        app.listen(port, () => {
+            console.log(`Server is running on port ${port}`);
         });
     } catch (error) {
-        logger.error('Ошибка при инициализации приложения:', error);
+        console.error('Failed to initialize application:', error);
         process.exit(1);
     }
 };
 
-initialize();
-
-module.exports = app; 
+module.exports = {
+    app,
+    initialize
+}; 

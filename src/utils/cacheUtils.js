@@ -1,137 +1,203 @@
 const Redis = require('ioredis');
-const { getConfig } = require('./configUtils');
-const logger = require('./logger');
+const { logInfo, logError } = require('./logger');
+const config = require('../config/app');
 
-const redis = new Redis({
-    host: getConfig('redis.host'),
-    port: getConfig('redis.port'),
-    password: getConfig('redis.password'),
-    retryStrategy: (times) => {
-        const delay = Math.min(times * 50, 2000);
-        return delay;
-    }
-});
+// Создаем клиент Redis
+const redis = new Redis(config.redis);
 
-redis.on('error', (error) => {
-    logger.error('Ошибка подключения к Redis:', error);
-});
-
-redis.on('connect', () => {
-    logger.info('Успешное подключение к Redis');
-});
-
-const setCache = async (key, value, ttl = 3600) => {
-    try {
-        const serializedValue = JSON.stringify(value);
-        await redis.set(key, serializedValue, 'EX', ttl);
-        logger.debug(`Установлено кэширование для ключа: ${key}`);
-        return true;
-    } catch (error) {
-        logger.error(`Ошибка при установке кэша для ключа ${key}:`, error);
-        return false;
-    }
-};
-
-const getCache = async (key) => {
+// Получение значения из кэша
+const get = async (key) => {
     try {
         const value = await redis.get(key);
         if (value) {
-            logger.debug(`Кэш найден для ключа: ${key}`);
+            logInfo(`Получено значение из кэша:`, { key });
             return JSON.parse(value);
         }
-        logger.debug(`Кэш не найден для ключа: ${key}`);
         return null;
     } catch (error) {
-        logger.error(`Ошибка при получении кэша для ключа ${key}:`, error);
+        logError(`Ошибка получения значения из кэша:`, { key, error });
         return null;
     }
 };
 
-const deleteCache = async (key) => {
+// Сохранение значения в кэш
+const set = async (key, value, ttl = 3600) => {
+    try {
+        await redis.set(key, JSON.stringify(value), 'EX', ttl);
+        logInfo(`Значение сохранено в кэш:`, { key, ttl });
+    } catch (error) {
+        logError(`Ошибка сохранения значения в кэш:`, { key, error });
+        throw error;
+    }
+};
+
+// Удаление значения из кэша
+const del = async (key) => {
     try {
         await redis.del(key);
-        logger.debug(`Удален кэш для ключа: ${key}`);
-        return true;
+        logInfo(`Значение удалено из кэша:`, { key });
     } catch (error) {
-        logger.error(`Ошибка при удалении кэша для ключа ${key}:`, error);
+        logError(`Ошибка удаления значения из кэша:`, { key, error });
+        throw error;
+    }
+};
+
+// Проверка существования ключа в кэше
+const exists = async (key) => {
+    try {
+        const result = await redis.exists(key);
+        return result === 1;
+    } catch (error) {
+        logError(`Ошибка проверки существования ключа в кэше:`, { key, error });
         return false;
     }
 };
 
-const clearCache = async (pattern) => {
+// Получение всех ключей по шаблону
+const keys = async (pattern) => {
+    try {
+        const result = await redis.keys(pattern);
+        return result;
+    } catch (error) {
+        logError(`Ошибка получения ключей из кэша:`, { pattern, error });
+        return [];
+    }
+};
+
+// Очистка кэша по шаблону
+const clear = async (pattern) => {
     try {
         const keys = await redis.keys(pattern);
         if (keys.length > 0) {
             await redis.del(keys);
-            logger.debug(`Очищен кэш для паттерна: ${pattern}`);
+            logInfo(`Кэш очищен по шаблону:`, { pattern, count: keys.length });
         }
-        return true;
     } catch (error) {
-        logger.error(`Ошибка при очистке кэша для паттерна ${pattern}:`, error);
-        return false;
+        logError(`Ошибка очистки кэша:`, { pattern, error });
+        throw error;
     }
 };
 
-const setHashCache = async (key, field, value) => {
+// Получение размера кэша
+const size = async () => {
     try {
-        const serializedValue = JSON.stringify(value);
-        await redis.hset(key, field, serializedValue);
-        logger.debug(`Установлено хэш-кэширование для ключа: ${key}, поле: ${field}`);
-        return true;
+        const info = await redis.info();
+        const lines = info.split('\n');
+        const usedMemory = lines.find(line => line.startsWith('used_memory:'));
+        return usedMemory ? parseInt(usedMemory.split(':')[1]) : 0;
     } catch (error) {
-        logger.error(`Ошибка при установке хэш-кэша для ключа ${key}, поле ${field}:`, error);
-        return false;
+        logError(`Ошибка получения размера кэша:`, error);
+        return 0;
     }
 };
 
-const getHashCache = async (key, field) => {
+// Получение статистики кэша
+const getStats = async () => {
     try {
-        const value = await redis.hget(key, field);
-        if (value) {
-            logger.debug(`Хэш-кэш найден для ключа: ${key}, поле: ${field}`);
-            return JSON.parse(value);
-        }
-        logger.debug(`Хэш-кэш не найден для ключа: ${key}, поле: ${field}`);
-        return null;
+        const info = await redis.info();
+        const lines = info.split('\n');
+        const stats = {};
+
+        lines.forEach(line => {
+            if (line.includes(':')) {
+                const [key, value] = line.split(':');
+                stats[key.trim()] = value.trim();
+            }
+        });
+
+        logInfo(`Получена статистика кэша:`, stats);
+        return stats;
     } catch (error) {
-        logger.error(`Ошибка при получении хэш-кэша для ключа ${key}, поле ${field}:`, error);
-        return null;
+        logError(`Ошибка получения статистики кэша:`, error);
+        return {};
     }
 };
 
-const deleteHashCache = async (key, field) => {
+// Получение времени жизни ключа
+const ttl = async (key) => {
     try {
-        await redis.hdel(key, field);
-        logger.debug(`Удален хэш-кэш для ключа: ${key}, поле: ${field}`);
-        return true;
+        return await redis.ttl(key);
     } catch (error) {
-        logger.error(`Ошибка при удалении хэш-кэша для ключа ${key}, поле ${field}:`, error);
-        return false;
+        logError(`Ошибка получения времени жизни ключа:`, { key, error });
+        return -1;
     }
 };
 
-const getHashAllCache = async (key) => {
+// Установка времени жизни ключа
+const expire = async (key, seconds) => {
     try {
-        const values = await redis.hgetall(key);
+        await redis.expire(key, seconds);
+        logInfo(`Установлено время жизни ключа:`, { key, seconds });
+    } catch (error) {
+        logError(`Ошибка установки времени жизни ключа:`, { key, seconds, error });
+        throw error;
+    }
+};
+
+// Получение всех ключей с их значениями
+const getAll = async () => {
+    try {
+        const keys = await redis.keys('*');
         const result = {};
-        for (const [field, value] of Object.entries(values)) {
-            result[field] = JSON.parse(value);
+
+        for (const key of keys) {
+            const value = await redis.get(key);
+            if (value) {
+                result[key] = JSON.parse(value);
+            }
         }
+
         return result;
     } catch (error) {
-        logger.error(`Ошибка при получении всего хэш-кэша для ключа ${key}:`, error);
-        return null;
+        logError(`Ошибка получения всех значений из кэша:`, error);
+        return {};
+    }
+};
+
+// Сохранение нескольких значений в кэш
+const mset = async (values, ttl = 3600) => {
+    try {
+        const pipeline = redis.pipeline();
+        for (const [key, value] of Object.entries(values)) {
+            pipeline.set(key, JSON.stringify(value), 'EX', ttl);
+        }
+        await pipeline.exec();
+        logInfo(`Сохранено несколько значений в кэш:`, { count: Object.keys(values).length });
+    } catch (error) {
+        logError(`Ошибка сохранения нескольких значений в кэш:`, error);
+        throw error;
+    }
+};
+
+// Получение нескольких значений из кэша
+const mget = async (keys) => {
+    try {
+        const values = await redis.mget(keys);
+        const result = {};
+        keys.forEach((key, index) => {
+            if (values[index]) {
+                result[key] = JSON.parse(values[index]);
+            }
+        });
+        return result;
+    } catch (error) {
+        logError(`Ошибка получения нескольких значений из кэша:`, error);
+        return {};
     }
 };
 
 module.exports = {
-    redis,
-    setCache,
-    getCache,
-    deleteCache,
-    clearCache,
-    setHashCache,
-    getHashCache,
-    deleteHashCache,
-    getHashAllCache
+    get,
+    set,
+    del,
+    exists,
+    keys,
+    clear,
+    size,
+    getStats,
+    ttl,
+    expire,
+    getAll,
+    mset,
+    mget
 }; 
